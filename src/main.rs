@@ -20,7 +20,7 @@ use smol;
 
 use embedded_hal::adc::OneShot;
 use embedded_hal::blocking::delay::DelayMs;
-use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::digital::v2::{OutputPin, InputPin};
 
 use embedded_svc::eth;
 use embedded_svc::eth::{Eth, TransitionalState};
@@ -135,6 +135,10 @@ fn main() -> Result<()> {
         default_nvs.clone(),
     )?;
 
+    let mut input_pin0 = pins.gpio0.into_input()?;
+    loop {
+        info!("reading pin 0: {}", input_pin0.is_high()?);
+    }
     Ok(())
 }
 
