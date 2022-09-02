@@ -34,9 +34,10 @@ use embedded_svc::sys_time::SystemTime;
 use embedded_svc::timer::TimerService;
 use embedded_svc::timer::*;
 use embedded_svc::wifi::*;
+use embedded_svc::event_bus::EventBus;
+use embedded_svc::event_bus::Postbox;
 
 use esp_idf_svc::eth::*;
-use esp_idf_svc::eventloop::*;
 use esp_idf_svc::eventloop::*;
 use esp_idf_svc::httpd as idf;
 use esp_idf_svc::httpd::ServerRegistry;
@@ -50,15 +51,18 @@ use esp_idf_svc::systime::EspSystemTime;
 use esp_idf_svc::timer::*;
 use esp_idf_svc::wifi::*;
 
+use esp_idf_hal::peripherals;
+use esp_idf_sys::EspError;
+
 use esp_idf_hal::adc;
 use esp_idf_hal::delay;
 use esp_idf_hal::gpio;
+use esp_idf_hal::gpio::InterruptType;
 use esp_idf_hal::i2c;
 use esp_idf_hal::prelude::*;
 use esp_idf_hal::spi;
 
 use esp_idf_sys::{self, c_types};
-use esp_idf_sys::{esp, EspError};
 
 use display_interface_spi::SPIInterfaceNoCS;
 
@@ -67,10 +71,8 @@ use embedded_graphics::pixelcolor::*;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::*;
 use embedded_graphics::text::*;
+use num_enum::{FromPrimitive, IntoPrimitive};
 
-use ili9341;
-use ssd1306;
-use ssd1306::mode::DisplayConfig;
 use st7789;
 
 use epd_waveshare::{epd4in2::*, graphics::VarDisplay, prelude::*};
@@ -92,28 +94,72 @@ thread_local! {
     static TLS: RefCell<u32> = RefCell::new(13);
 }
 
-fn main() -> Result<()> {
+#[repr(i32)]
+#[derive(Copy, Clone, Debug, FromPrimitive, IntoPrimitive)]
+pub enum ButtonRawEvent {
+    IO0 = 1 << 0,
+    #[default]
+    Unknown = 1 << 31,
+}
+
+fn init_esp() -> Result<EspBackgroundEventLoop, EspError> {
     esp_idf_sys::link_patches();
+
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
-    info!("foobar");
 
-    // Get backtraces from anyhow; only works for Xtensa arch currently
-    // TODO: No longer working with ESP-IDF 4.3.1+
-    //#[cfg(target_arch = "xtensa")]
-    //env::set_var("RUST_BACKTRACE", "1");
-
-    #[allow(unused)]
-    let peripherals = Peripherals::take().unwrap();
-    #[allow(unused)]
-    let pins = peripherals.pins;
+    use esp_idf_svc::{netif::EspNetifStack, sysloop::EspSysLoopStack};
+    // use esp_idf_svc::nvs::EspDefaultNvs;
+    use std::sync::Arc;
 
     #[allow(unused)]
     let netif_stack = Arc::new(EspNetifStack::new()?);
     #[allow(unused)]
     let sys_loop_stack = Arc::new(EspSysLoopStack::new()?);
+
+    Ok(EspBackgroundEventLoop::new(&Default::default())?)
+}
+
+impl EspTypedEventSerializer<ButtonRawEvent> for ButtonRawEvent {
+    fn serialize<R>(
+        event: &ButtonRawEvent,
+        f: impl for<'a> FnOnce(&'a EspEventPostData) -> R,
+    ) -> R {
+        f(&unsafe { EspEventPostData::new(Self::source(), Some(1), event) })
+    }
+}
+
+impl EspTypedEventSource for ButtonRawEvent {
+    fn source() -> *const c_types::c_char {
+        b"DEMO-SERVICE\0".as_ptr() as *const _
+    }
+}
+
+impl EspTypedEventDeserializer<ButtonRawEvent> for ButtonRawEvent {
+    #[allow(non_upper_case_globals, non_snake_case)]
+    fn deserialize<R>(
+        data: &esp_idf_svc::eventloop::EspEventFetchData,
+        f: &mut impl for<'a> FnMut(&'a ButtonRawEvent) -> R,
+    ) -> R {
+        let event_id = data.event_id as u32;
+
+        let event = if event_id == 1 {
+            ButtonRawEvent::IO0
+        } else {
+            panic!("Unknown event ID: {}", event_id);
+        };
+        f(&event)
+    }
+}
+
+fn main() -> Result<()> {
+    let mut eventloop = init_esp().expect("Error initializing ESP");
+    // Bind the log crate to the ESP Logging facilities
+
     #[allow(unused)]
-    let default_nvs = Arc::new(EspDefaultNvs::new()?);
+    let peripherals = Peripherals::take().unwrap();
+    #[allow(unused)]
+    let pins = peripherals.pins;
 
     #[cfg(feature = "ttgo")]
     ttgo_hello_world(
@@ -126,18 +172,35 @@ fn main() -> Result<()> {
         pins.gpio34,
     )?;
 
-    #[allow(clippy::redundant_clone)]
-    #[cfg(not(feature = "qemu"))]
-    #[allow(unused_mut)]
-    let mut wifi = wifi(
-        netif_stack.clone(),
-        sys_loop_stack.clone(),
-        default_nvs.clone(),
-    )?;
+    // #[allow(clippy::redundant_clone)]
+    // #[cfg(not(feature = "qemu"))]
+    // #[allow(unused_mut)]
+    // let mut wifi = wifi(
+    //     netif_stack.clone(),
+    //     sys_loop_stack.clone(),r Beuten verbessert werden.
+    //     default_nvs.clone(),
+    // )?;
 
-    let mut input_pin0 = pins.gpio0.into_input()?;
+    let io0_irq = pins.gpio0.into_input()?;
+    let mut io0_eventloop = eventloop.clone();
+
+    let io0_irq = unsafe {
+        io0_irq.into_subscribed(
+            move || {
+                let now = EspSystemTime {}.now();
+                io0_eventloop.post(&ButtonRawEvent::IO0, Some(Duration::from_millis(0))).unwrap();
+                },
+            InterruptType::NegEdge,
+        )
+    }?;
+
+    let _subscription = eventloop.subscribe(|message: &ButtonRawEvent| {
+        info!("Got message from the event loop");//: {:?}", message.0);
+    })?;
+
     loop {
-        info!("reading pin 0: {}", input_pin0.is_high()?);
+        info!("waiting...");
+        thread::sleep(Duration::from_millis(100));
     }
     Ok(())
 }
