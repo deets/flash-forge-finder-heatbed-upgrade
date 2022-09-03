@@ -117,7 +117,9 @@ fn init_esp() -> Result<EspBackgroundEventLoop, EspError> {
     #[allow(unused)]
     let sys_loop_stack = Arc::new(EspSysLoopStack::new()?);
 
-    Ok(EspBackgroundEventLoop::new(&Default::default())?)
+    let mut config:BackgroundLoopConfiguration = Default::default();
+    config.task_stack_size = 8000;
+    Ok(EspBackgroundEventLoop::new(&config)?)
 }
 
 impl EspTypedEventSerializer<ButtonRawEvent> for ButtonRawEvent {
