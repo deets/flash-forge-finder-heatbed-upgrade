@@ -98,6 +98,7 @@ thread_local! {
 #[derive(Copy, Clone, Debug, FromPrimitive, IntoPrimitive)]
 pub enum ButtonRawEvent {
     IO0 = 1 << 0,
+    TIMER = 1 << 1,
     #[default]
     Unknown = 1 << 31,
 }
@@ -127,7 +128,12 @@ impl EspTypedEventSerializer<ButtonRawEvent> for ButtonRawEvent {
         event: &ButtonRawEvent,
         f: impl for<'a> FnOnce(&'a EspEventPostData) -> R,
     ) -> R {
-        f(&unsafe { EspEventPostData::new(Self::source(), Some(1), event) })
+        let v = match event {
+            ButtonRawEvent::IO0 => 1 << 0,
+            ButtonRawEvent::TIMER => 1 << 1,
+            ButtonRawEvent::Unknown => 1 << 31,
+        };
+        f(&unsafe { EspEventPostData::new(Self::source(), Some(v), event) })
     }
 }
 
@@ -147,12 +153,25 @@ impl EspTypedEventDeserializer<ButtonRawEvent> for ButtonRawEvent {
 
         let event = if event_id == 1 {
             ButtonRawEvent::IO0
+        } else if event_id == 2 {
+            ButtonRawEvent::TIMER
         } else {
             panic!("Unknown event ID: {}", event_id);
         };
         f(&event)
     }
 }
+
+use esp_idf_hal::gpio::Gpio21;
+use esp_idf_hal::gpio::Gpio34;
+use esp_idf_hal::gpio::Gpio35;
+use esp_idf_hal::gpio::Gpio36;
+use esp_idf_hal::gpio::Gpio37;
+use esp_idf_hal::gpio::Gpio38;
+use esp_idf_hal::spi::SPI2;
+use st7789::ST7789;
+
+type Display = ST7789<SPIInterfaceNoCS<esp_idf_hal::spi::Master<SPI2, Gpio36<esp_idf_hal::gpio::Unknown>, Gpio35<esp_idf_hal::gpio::Unknown>, Gpio21<esp_idf_hal::gpio::Unknown>, Gpio34<esp_idf_hal::gpio::Unknown>>, Gpio37<esp_idf_hal::gpio::Output>>, Gpio38<esp_idf_hal::gpio::Output>>;
 
 fn main() -> Result<()> {
     let mut eventloop = init_esp().expect("Error initializing ESP");
@@ -164,7 +183,7 @@ fn main() -> Result<()> {
     let pins = peripherals.pins;
 
     #[cfg(feature = "ttgo")]
-    ttgo_hello_world(
+    let mut display = ttgo_hello_world(
         pins.gpio33,
         pins.gpio37,
         pins.gpio38,
@@ -186,6 +205,7 @@ fn main() -> Result<()> {
     let io0_irq = pins.gpio0.into_input()?;
     let mut io0_eventloop = eventloop.clone();
 
+    let mut io18 = pins.gpio18.into_output()?;
     let io0_irq = unsafe {
         io0_irq.into_subscribed(
             move || {
@@ -196,12 +216,48 @@ fn main() -> Result<()> {
         )
     }?;
 
-    let _subscription = eventloop.subscribe(|message: &ButtonRawEvent| {
-        info!("Got message from the event loop");//: {:?}", message.0);
+    let mut state = false;
+    let mut adc_value = 0;
+
+    // The TTGO board's screen does not start at offset 0x0, and the physical size is 135x240, instead of 240x320
+    let top_left = Point::new(52, 40);
+    let size = Size::new(135, 240);
+
+    let mut periodic_eventloop = eventloop.clone();
+    let mut periodic_timer = EspTimerService::new()?.timer(move || {
+        periodic_eventloop.post(&ButtonRawEvent::TIMER, Some(Duration::from_millis(0))).unwrap();
     })?;
+    periodic_timer.every(Duration::from_secs(1))?;
+
+    let mut adc1_3 = pins.gpio4.into_analog_atten_11db()?;
+    let mut powered_adc1 = adc::PoweredAdc::new(
+        peripherals.adc1,
+        adc::config::Config::new().calibration(true),
+    )?;
+    let _subscription = eventloop.subscribe( move |message: &ButtonRawEvent| {
+        match message {
+            ButtonRawEvent::IO0 => {
+                info!("Got message from the event loop");//: {:?}", message.0);
+                state = !state;
+                if state {
+                    io18.set_high();
+                } else {
+                    io18.set_low();
+                }
+            },
+            _ => {}
+        }
+        adc_value = powered_adc1.read(&mut adc1_3).unwrap();
+        let power_text = format!(
+            "Power: {}", if state { "On" } else { "Off"});
+        let adc_text = format!("Adc: {}", adc_value);
+
+        led_draw(&power_text, &adc_text, &mut display.cropped(&Rectangle::new(top_left, size)))
+            .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
+   })?;
 
     loop {
-        info!("waiting...");
+        // too large a value here triggers the WDT?
         thread::sleep(Duration::from_millis(100));
     }
     Ok(())
@@ -217,7 +273,8 @@ fn ttgo_hello_world(
     sclk: gpio::Gpio36<gpio::Unknown>,
     sdo: gpio::Gpio35<gpio::Unknown>,
     cs: gpio::Gpio34<gpio::Unknown>,
-) -> Result<()> {
+) -> Result<Display>
+{
     info!("About to initialize the TTGO ST7789 LED driver");
 
     let config = <spi::config::Config as Default>::default().baudrate(26.MHz().into());
@@ -254,16 +311,11 @@ fn ttgo_hello_world(
         .set_orientation(st7789::Orientation::Portrait)
         .map_err(|e| anyhow::anyhow!("Display error: {:?}", e))?;
 
-    // The TTGO board's screen does not start at offset 0x0, and the physical size is 135x240, instead of 240x320
-    let top_left = Point::new(52, 40);
-    let size = Size::new(135, 240);
-
-    led_draw(&mut display.cropped(&Rectangle::new(top_left, size)))
-        .map_err(|e| anyhow::anyhow!("Display error: {:?}", e))
+    return Ok(display)
 }
 
 #[allow(dead_code)]
-fn led_draw<D>(display: &mut D) -> Result<(), D::Error>
+fn led_draw<D>(power_text: &str, adc_text: &str, display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget + Dimensions,
     D::Color: From<Rgb565>,
@@ -279,15 +331,18 @@ where
                 .build(),
         )
         .draw(display)?;
-
+    let pos = Point::new(10, (display.bounding_box().size.height - 10) as i32 / 2);
     Text::new(
-        "Hello Rust!",
-        Point::new(10, (display.bounding_box().size.height - 10) as i32 / 2),
+        power_text,
+        pos,
         MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE.into()),
-    )
-    .draw(display)?;
-
-    info!("LED rendering done");
+    ).draw(display)?;
+    let offset = Point::new(0, 24);
+    Text::new(
+        adc_text,
+        pos + offset ,
+        MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE.into()),
+    ).draw(display)?;
 
     Ok(())
 }
