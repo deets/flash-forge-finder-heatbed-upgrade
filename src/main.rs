@@ -231,7 +231,7 @@ fn main() -> Result<()> {
     let mut sample_timer = EspTimerService::new()?.timer(move || {
         sample_eventloop.post(&ButtonRawEvent::SAMPLE_TIMER, Some(Duration::from_millis(0))).unwrap();
     })?;
-    sample_timer.every(Duration::from_millis(10))?;
+    sample_timer.every(Duration::from_millis(1))?;
 
     let mut display_eventloop = eventloop.clone();
     let mut display_timer = EspTimerService::new()?.timer(move || {
@@ -246,7 +246,7 @@ fn main() -> Result<()> {
     )?;
 
     // Cutoff and sampling frequencies
-    let f0 = 10.hz();
+    let f0 = 1.hz();
     let fs = 1.khz();
 
     // Create coefficients for the biquads
