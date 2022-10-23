@@ -18,9 +18,7 @@ use anyhow::bail;
 use embedded_svc::mqtt::client::utils::ConnState;
 use log::*;
 
-use url;
-
-use smol;
+use biquad::*;
 
 use embedded_hal::adc::OneShot;
 use embedded_hal::blocking::delay::DelayMs;
@@ -102,7 +100,8 @@ thread_local! {
 #[derive(Copy, Clone, Debug, FromPrimitive, IntoPrimitive)]
 pub enum ButtonRawEvent {
     IO0 = 1 << 0,
-    TIMER = 1 << 1,
+    SAMPLE_TIMER = 1 << 1,
+    DISPLAY_TIMER = 1 << 2,
     #[default]
     Unknown = 1 << 31,
 }
@@ -134,7 +133,8 @@ impl EspTypedEventSerializer<ButtonRawEvent> for ButtonRawEvent {
     ) -> R {
         let v = match event {
             ButtonRawEvent::IO0 => 1 << 0,
-            ButtonRawEvent::TIMER => 1 << 1,
+            ButtonRawEvent::SAMPLE_TIMER => 1 << 1,
+            ButtonRawEvent::DISPLAY_TIMER => 1 << 2,
             ButtonRawEvent::Unknown => 1 << 31,
         };
         f(&unsafe { EspEventPostData::new(Self::source(), Some(v), event) })
@@ -155,10 +155,12 @@ impl EspTypedEventDeserializer<ButtonRawEvent> for ButtonRawEvent {
     ) -> R {
         let event_id = data.event_id as u32;
 
-        let event = if event_id == 1 {
+        let event = if event_id == (1 << 0) {
             ButtonRawEvent::IO0
-        } else if event_id == 2 {
-            ButtonRawEvent::TIMER
+        } else if event_id == (1 << 1) {
+            ButtonRawEvent::SAMPLE_TIMER
+        } else if event_id == (1 << 2) {
+            ButtonRawEvent::DISPLAY_TIMER
         } else {
             panic!("Unknown event ID: {}", event_id);
         };
@@ -225,11 +227,17 @@ fn main() -> Result<()> {
     let top_left = Point::new(52, 40);
     let size = Size::new(135, 240);
 
-    let mut periodic_eventloop = eventloop.clone();
-    let mut periodic_timer = EspTimerService::new()?.timer(move || {
-        periodic_eventloop.post(&ButtonRawEvent::TIMER, Some(Duration::from_millis(0))).unwrap();
+    let mut sample_eventloop = eventloop.clone();
+    let mut sample_timer = EspTimerService::new()?.timer(move || {
+        sample_eventloop.post(&ButtonRawEvent::SAMPLE_TIMER, Some(Duration::from_millis(0))).unwrap();
     })?;
-    periodic_timer.every(Duration::from_secs(1))?;
+    sample_timer.every(Duration::from_millis(10))?;
+
+    let mut display_eventloop = eventloop.clone();
+    let mut display_timer = EspTimerService::new()?.timer(move || {
+        display_eventloop.post(&ButtonRawEvent::DISPLAY_TIMER, Some(Duration::from_millis(0))).unwrap();
+    })?;
+    display_timer.every(Duration::from_secs(1))?;
 
     let mut adc1_3 = pins.gpio4.into_analog_atten_11db()?;
     let mut powered_adc1 = adc::PoweredAdc::new(
@@ -237,8 +245,19 @@ fn main() -> Result<()> {
         adc::config::Config::new().calibration(true),
     )?;
 
+    // Cutoff and sampling frequencies
+    let f0 = 10.hz();
+    let fs = 1.khz();
+
+    // Create coefficients for the biquads
+    let coeffs = Coefficients::<f32>::from_params(Type::LowPass, fs, f0, Q_BUTTERWORTH_F32).unwrap();
+
+    // Create two different biquads
+    let mut biquad1 = DirectForm1::<f32>::new(coeffs);
+
     //let mut thermistor = Thermistor::new(&powered_adc1_3)?;
     let _subscription = eventloop.subscribe( move |message: &ButtonRawEvent| {
+        let mut update_display = false;
         match message {
             ButtonRawEvent::IO0 => {
                 info!("Got message from the event loop");//: {:?}", message.0);
@@ -248,17 +267,23 @@ fn main() -> Result<()> {
                 } else {
                     io18.set_low().unwrap();
                 }
+                update_display = true;
+            },
+            ButtonRawEvent::DISPLAY_TIMER => {
+                update_display = true;
             },
             _ => {}
         }
-        let adc_value = powered_adc1.read(&mut adc1_3).unwrap();
-        let power_text = format!(
-            "Power: {}", if state { "On" } else { "Off"});
-        let adc_text = format!("Adc: {}", adc_value);
+        let adc_value = biquad1.run(powered_adc1.read(&mut adc1_3).unwrap() as f32);
+        if update_display {
+            let power_text = format!(
+                "Power: {}", if state { "On" } else { "Off"});
+            let adc_text = format!("Adc: {}", adc_value);
 
-        led_draw(&power_text, &adc_text, &mut display.cropped(&Rectangle::new(top_left, size)))
-            .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
-   })?;
+            led_draw(&power_text, &adc_text, &mut display.cropped(&Rectangle::new(top_left, size)))
+                .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
+        }
+    })?;
 
     loop {
         // too large a value here triggers the WDT?
