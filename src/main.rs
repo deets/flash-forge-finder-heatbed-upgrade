@@ -175,7 +175,7 @@ use esp_idf_hal::gpio::Gpio38;
 use esp_idf_hal::spi::SPI2;
 use st7789::ST7789;
 
-type Display = ST7789<SPIInterfaceNoCS<esp_idf_hal::spi::Master<SPI2, Gpio36<esp_idf_hal::gpio::Output>, Gpio35<esp_idf_hal::gpio::Unknown>, Gpio21<esp_idf_hal::gpio::Unknown>, Gpio34<esp_idf_hal::gpio::Unknown>>, Gpio37<esp_idf_hal::gpio::Unknown>>, Gpio38<esp_idf_hal::gpio::Unknown>>;
+type Display = ST7789<SPIInterfaceNoCS<esp_idf_hal::spi::Master<SPI2, Gpio36<esp_idf_hal::gpio::Unknown>, Gpio35<esp_idf_hal::gpio::Unknown>, Gpio21<esp_idf_hal::gpio::Unknown>, Gpio34<esp_idf_hal::gpio::Unknown>>, Gpio37<esp_idf_hal::gpio::Output>>, Gpio38<esp_idf_hal::gpio::Output>>;
 
 fn main() -> Result<()> {
     let mut eventloop = init_esp().expect("Error initializing ESP");
@@ -272,9 +272,9 @@ fn main() -> Result<()> {
 fn ttgo_hello_world(
     backlight: gpio::Gpio33<gpio::Unknown>,
     dc: gpio::Gpio37<gpio::Unknown>,
-    rst: gpio::Gpio38<gpio::Output>,
+    rst: gpio::Gpio38<gpio::Unknown>,
     spi: spi::SPI2,
-    sclk: gpio::Gpio36<gpio::Output>,
+    sclk: gpio::Gpio36<gpio::Unknown>,
     sdo: gpio::Gpio35<gpio::Unknown>,
     cs: gpio::Gpio34<gpio::Unknown>,
 ) -> Result<Display>
