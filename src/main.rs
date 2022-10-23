@@ -179,6 +179,19 @@ use st7789::ST7789;
 
 type Display = ST7789<SPIInterfaceNoCS<esp_idf_hal::spi::Master<SPI2, Gpio36<esp_idf_hal::gpio::Unknown>, Gpio35<esp_idf_hal::gpio::Unknown>, Gpio21<esp_idf_hal::gpio::Unknown>, Gpio34<esp_idf_hal::gpio::Unknown>>, Gpio37<esp_idf_hal::gpio::Output>>, Gpio38<esp_idf_hal::gpio::Output>>;
 
+// 0.5V -> 473 read from ADC
+// 1.0V -> 969 read from ADC
+const C1:(f32, f32) = (0.5, 473.0);
+const C2:(f32, f32) = (1.0, 969.0);
+
+// pX: V, adc
+fn vmap(adc: f32, p0: (f32, f32), p1: (f32, f32)) -> f32 {
+    let a = (p1.0 - p0.0) / (p1.1 - p0.1);
+    let b = p0.0 - (a * p0.1);
+    a * adc + b
+}
+
+
 fn main() -> Result<()> {
     let mut eventloop = init_esp().expect("Error initializing ESP");
     // Bind the log crate to the ESP Logging facilities
@@ -279,8 +292,9 @@ fn main() -> Result<()> {
             let power_text = format!(
                 "Power: {}", if state { "On" } else { "Off"});
             let adc_text = format!("Adc: {}", adc_value);
+            let voltage_text = format!("V: {}", vmap(adc_value, C1, C2));
 
-            led_draw(&power_text, &adc_text, &mut display.cropped(&Rectangle::new(top_left, size)))
+            led_draw(&power_text, &adc_text, &voltage_text, &mut display.cropped(&Rectangle::new(top_left, size)))
                 .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
         }
     })?;
@@ -344,7 +358,7 @@ fn ttgo_hello_world(
 }
 
 #[allow(dead_code)]
-fn led_draw<D>(power_text: &str, adc_text: &str, display: &mut D) -> Result<(), D::Error>
+fn led_draw<D>(power_text: &str, adc_text: &str, voltage_text: &str, display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget + Dimensions,
     D::Color: From<Rgb565>,
@@ -370,6 +384,11 @@ where
     Text::new(
         adc_text,
         pos + offset ,
+        MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE.into()),
+    ).draw(display)?;
+    Text::new(
+        voltage_text,
+        pos + offset * 2 ,
         MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE.into()),
     ).draw(display)?;
 
