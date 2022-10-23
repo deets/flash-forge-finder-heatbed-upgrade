@@ -2,6 +2,10 @@
 #![allow(clippy::single_component_path_imports)]
 //#![feature(backtrace)]
 
+// mod thermistor;
+
+// use thermistor::Thermistor;
+
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -84,11 +88,11 @@ const SSID: &str = env!("RUST_ESP32_STD_DEMO_WIFI_SSID");
 #[cfg(not(feature = "qemu"))]
 const PASS: &str = env!("RUST_ESP32_STD_DEMO_WIFI_PASS");
 
-#[cfg(esp32s2)]
-include!(env!("EMBUILD_GENERATED_SYMBOLS_FILE"));
+// #[cfg(esp32s2)]
+// include!(env!("EMBUILD_GENERATED_SYMBOLS_FILE"));
 
-#[cfg(esp32s2)]
-const ULP: &[u8] = include_bytes!(env!("EMBUILD_GENERATED_BIN_FILE"));
+// #[cfg(esp32s2)]
+// const ULP: &[u8] = include_bytes!(env!("EMBUILD_GENERATED_BIN_FILE"));
 
 thread_local! {
     static TLS: RefCell<u32> = RefCell::new(13);
@@ -171,7 +175,7 @@ use esp_idf_hal::gpio::Gpio38;
 use esp_idf_hal::spi::SPI2;
 use st7789::ST7789;
 
-type Display = ST7789<SPIInterfaceNoCS<esp_idf_hal::spi::Master<SPI2, Gpio36<esp_idf_hal::gpio::Unknown>, Gpio35<esp_idf_hal::gpio::Unknown>, Gpio21<esp_idf_hal::gpio::Unknown>, Gpio34<esp_idf_hal::gpio::Unknown>>, Gpio37<esp_idf_hal::gpio::Output>>, Gpio38<esp_idf_hal::gpio::Output>>;
+type Display = ST7789<SPIInterfaceNoCS<esp_idf_hal::spi::Master<SPI2, Gpio36<esp_idf_hal::gpio::Output>, Gpio35<esp_idf_hal::gpio::Unknown>, Gpio21<esp_idf_hal::gpio::Unknown>, Gpio34<esp_idf_hal::gpio::Unknown>>, Gpio37<esp_idf_hal::gpio::Unknown>>, Gpio38<esp_idf_hal::gpio::Unknown>>;
 
 fn main() -> Result<()> {
     let mut eventloop = init_esp().expect("Error initializing ESP");
@@ -206,10 +210,9 @@ fn main() -> Result<()> {
     let mut io0_eventloop = eventloop.clone();
 
     let mut io18 = pins.gpio18.into_output()?;
-    let io0_irq = unsafe {
+    let _io0_irq = unsafe {
         io0_irq.into_subscribed(
             move || {
-                let now = EspSystemTime {}.now();
                 io0_eventloop.post(&ButtonRawEvent::IO0, Some(Duration::from_millis(0))).unwrap();
                 },
             InterruptType::NegEdge,
@@ -217,7 +220,6 @@ fn main() -> Result<()> {
     }?;
 
     let mut state = false;
-    let mut adc_value = 0;
 
     // The TTGO board's screen does not start at offset 0x0, and the physical size is 135x240, instead of 240x320
     let top_left = Point::new(52, 40);
@@ -230,31 +232,33 @@ fn main() -> Result<()> {
     periodic_timer.every(Duration::from_secs(1))?;
 
     let mut adc1_3 = pins.gpio4.into_analog_atten_11db()?;
-    let mut powered_adc1 = adc::PoweredAdc::new(
+    let mut powered_adc1_3 = adc::PoweredAdc::new(
         peripherals.adc1,
         adc::config::Config::new().calibration(true),
     )?;
-    let _subscription = eventloop.subscribe( move |message: &ButtonRawEvent| {
-        match message {
-            ButtonRawEvent::IO0 => {
-                info!("Got message from the event loop");//: {:?}", message.0);
-                state = !state;
-                if state {
-                    io18.set_high();
-                } else {
-                    io18.set_low();
-                }
-            },
-            _ => {}
-        }
-        adc_value = powered_adc1.read(&mut adc1_3).unwrap();
-        let power_text = format!(
-            "Power: {}", if state { "On" } else { "Off"});
-        let adc_text = format!("Adc: {}", adc_value);
 
-        led_draw(&power_text, &adc_text, &mut display.cropped(&Rectangle::new(top_left, size)))
-            .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
-   })?;
+   //  let mut thermistor = Thermistor::new(&powered_adc1_3)?;
+   //  let _subscription = eventloop.subscribe( move |message: &ButtonRawEvent| {
+   //      match message {
+   //          ButtonRawEvent::IO0 => {
+   //              info!("Got message from the event loop");//: {:?}", message.0);
+   //              state = !state;
+   //              if state {
+   //                  io18.set_high().unwrap();
+   //              } else {
+   //                  io18.set_low().unwrap();
+   //              }
+   //          },
+   //          _ => {}
+   //      }
+   //      let adc_value = thermistor.read_voltage().unwrap();
+   //      let power_text = format!(
+   //          "Power: {}", if state { "On" } else { "Off"});
+   //      let adc_text = format!("Adc: {}", adc_value);
+
+   //      led_draw(&power_text, &adc_text, &mut display.cropped(&Rectangle::new(top_left, size)))
+   //          .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
+   // })?;
 
     loop {
         // too large a value here triggers the WDT?
@@ -268,9 +272,9 @@ fn main() -> Result<()> {
 fn ttgo_hello_world(
     backlight: gpio::Gpio33<gpio::Unknown>,
     dc: gpio::Gpio37<gpio::Unknown>,
-    rst: gpio::Gpio38<gpio::Unknown>,
+    rst: gpio::Gpio38<gpio::Output>,
     spi: spi::SPI2,
-    sclk: gpio::Gpio36<gpio::Unknown>,
+    sclk: gpio::Gpio36<gpio::Output>,
     sdo: gpio::Gpio35<gpio::Unknown>,
     cs: gpio::Gpio34<gpio::Unknown>,
 ) -> Result<Display>
