@@ -1,12 +1,11 @@
 [package]
-name = "rust-esp32-std-demo"
-version = "0.26.1"
-authors = ["ivmarkov"]
+name = "flashforge-finder-heatbed-controller"
+version = "1.0.0"
+authors = ["deets"]
 edition = "2018"
 categories = ["embedded", "hardware-support"]
 keywords = ["embedded", "svc", "idf", "esp-idf", "esp32"]
-description = "A demo binary crate for the ESP32 and ESP-IDF, which connects to WiFi, Ethernet, drives a small HTTP server and draws on a LED screen"
-repository = "https://github.com/ivmarkov/rust-esp32-std-demo"
+description = "A firmware for an TTGO ESP32S2 controller for a 3D printer heatbed"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 
