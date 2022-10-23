@@ -232,33 +232,33 @@ fn main() -> Result<()> {
     periodic_timer.every(Duration::from_secs(1))?;
 
     let mut adc1_3 = pins.gpio4.into_analog_atten_11db()?;
-    let mut powered_adc1_3 = adc::PoweredAdc::new(
+    let mut powered_adc1 = adc::PoweredAdc::new(
         peripherals.adc1,
         adc::config::Config::new().calibration(true),
     )?;
 
-   //  let mut thermistor = Thermistor::new(&powered_adc1_3)?;
-   //  let _subscription = eventloop.subscribe( move |message: &ButtonRawEvent| {
-   //      match message {
-   //          ButtonRawEvent::IO0 => {
-   //              info!("Got message from the event loop");//: {:?}", message.0);
-   //              state = !state;
-   //              if state {
-   //                  io18.set_high().unwrap();
-   //              } else {
-   //                  io18.set_low().unwrap();
-   //              }
-   //          },
-   //          _ => {}
-   //      }
-   //      let adc_value = thermistor.read_voltage().unwrap();
-   //      let power_text = format!(
-   //          "Power: {}", if state { "On" } else { "Off"});
-   //      let adc_text = format!("Adc: {}", adc_value);
+    //let mut thermistor = Thermistor::new(&powered_adc1_3)?;
+    let _subscription = eventloop.subscribe( move |message: &ButtonRawEvent| {
+        match message {
+            ButtonRawEvent::IO0 => {
+                info!("Got message from the event loop");//: {:?}", message.0);
+                state = !state;
+                if state {
+                    io18.set_high().unwrap();
+                } else {
+                    io18.set_low().unwrap();
+                }
+            },
+            _ => {}
+        }
+        let adc_value = powered_adc1.read(&mut adc1_3).unwrap();
+        let power_text = format!(
+            "Power: {}", if state { "On" } else { "Off"});
+        let adc_text = format!("Adc: {}", adc_value);
 
-   //      led_draw(&power_text, &adc_text, &mut display.cropped(&Rectangle::new(top_left, size)))
-   //          .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
-   // })?;
+        led_draw(&power_text, &adc_text, &mut display.cropped(&Rectangle::new(top_left, size)))
+            .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
+   })?;
 
     loop {
         // too large a value here triggers the WDT?
