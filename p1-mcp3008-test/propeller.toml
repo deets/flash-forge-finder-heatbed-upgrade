@@ -1,0 +1,14 @@
+[project]
+main-file="spin/test.spin"
+
+libraries=[
+]
+
+[propeller]
+kind="P1"
+serial-device="/dev/serial/by-id/usb-Parallax_Inc_Propeller_QuickStart_DA2FKQWJ-if00-port0"
+
+[defines]
+## Define which board we are targeting
+#P2EVAL=""
+#UNIHFY=""
