@@ -2,8 +2,10 @@
 #![allow(clippy::single_component_path_imports)]
 //#![feature(backtrace)]
 
-// mod thermistor;
+mod mcp3008;
+use mcp3008::MCP3008;
 
+// mod thermistor
 // use thermistor::Thermistor;
 
 use std::fs;
@@ -100,8 +102,8 @@ thread_local! {
 #[derive(Copy, Clone, Debug, FromPrimitive, IntoPrimitive)]
 pub enum ButtonRawEvent {
     IO0 = 1 << 0,
-    SAMPLE_TIMER = 1 << 1,
-    DISPLAY_TIMER = 1 << 2,
+    SampleTimer = 1 << 1,
+    DisplayTimer = 1 << 2,
     #[default]
     Unknown = 1 << 31,
 }
@@ -133,8 +135,8 @@ impl EspTypedEventSerializer<ButtonRawEvent> for ButtonRawEvent {
     ) -> R {
         let v = match event {
             ButtonRawEvent::IO0 => 1 << 0,
-            ButtonRawEvent::SAMPLE_TIMER => 1 << 1,
-            ButtonRawEvent::DISPLAY_TIMER => 1 << 2,
+            ButtonRawEvent::SampleTimer => 1 << 1,
+            ButtonRawEvent::DisplayTimer => 1 << 2,
             ButtonRawEvent::Unknown => 1 << 31,
         };
         f(&unsafe { EspEventPostData::new(Self::source(), Some(v), event) })
@@ -158,9 +160,9 @@ impl EspTypedEventDeserializer<ButtonRawEvent> for ButtonRawEvent {
         let event = if event_id == (1 << 0) {
             ButtonRawEvent::IO0
         } else if event_id == (1 << 1) {
-            ButtonRawEvent::SAMPLE_TIMER
+            ButtonRawEvent::SampleTimer
         } else if event_id == (1 << 2) {
-            ButtonRawEvent::DISPLAY_TIMER
+            ButtonRawEvent::DisplayTimer
         } else {
             panic!("Unknown event ID: {}", event_id);
         };
@@ -242,13 +244,13 @@ fn main() -> Result<()> {
 
     let mut sample_eventloop = eventloop.clone();
     let mut sample_timer = EspTimerService::new()?.timer(move || {
-        sample_eventloop.post(&ButtonRawEvent::SAMPLE_TIMER, Some(Duration::from_millis(0))).unwrap();
+        sample_eventloop.post(&ButtonRawEvent::SampleTimer, Some(Duration::from_millis(0))).unwrap();
     })?;
     sample_timer.every(Duration::from_millis(1))?;
 
     let mut display_eventloop = eventloop.clone();
     let mut display_timer = EspTimerService::new()?.timer(move || {
-        display_eventloop.post(&ButtonRawEvent::DISPLAY_TIMER, Some(Duration::from_millis(0))).unwrap();
+        display_eventloop.post(&ButtonRawEvent::DisplayTimer, Some(Duration::from_millis(0))).unwrap();
     })?;
     display_timer.every(Duration::from_secs(1))?;
 
@@ -267,6 +269,13 @@ fn main() -> Result<()> {
 
     // Create two different biquads
     let mut biquad1 = DirectForm1::<f32>::new(coeffs);
+    let adc = MCP3008::new(
+        peripherals.spi3,
+        pins.gpio12, // clk
+        pins.gpio11, // mosi
+        pins.gpio13, // miso
+        pins.gpio10 // cs
+    )?;
 
     //let mut thermistor = Thermistor::new(&powered_adc1_3)?;
     let _subscription = eventloop.subscribe( move |message: &ButtonRawEvent| {
@@ -282,7 +291,7 @@ fn main() -> Result<()> {
                 }
                 update_display = true;
             },
-            ButtonRawEvent::DISPLAY_TIMER => {
+            ButtonRawEvent::DisplayTimer => {
                 update_display = true;
             },
             _ => {}
@@ -291,7 +300,7 @@ fn main() -> Result<()> {
         if update_display {
             let power_text = format!(
                 "Power: {}", if state { "On" } else { "Off"});
-            let adc_text = format!("Adc: {}", adc_value);
+            let adc_text = format!("Adc: {}", adc.read(0));
             let voltage_text = format!("V: {}", vmap(adc_value, C1, C2));
 
             led_draw(&power_text, &adc_text, &voltage_text, &mut display.cropped(&Rectangle::new(top_left, size)))
