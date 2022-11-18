@@ -269,14 +269,13 @@ fn main() -> Result<()> {
 
     // Create two different biquads
     let mut biquad1 = DirectForm1::<f32>::new(coeffs);
-    let adc = MCP3008::new(
+    let mut adc = MCP3008::new(
         peripherals.spi3,
         pins.gpio12, // clk
         pins.gpio11, // mosi
         pins.gpio13, // miso
-        pins.gpio10 // cs
+        pins.gpio15 // cs
     )?;
-
     //let mut thermistor = Thermistor::new(&powered_adc1_3)?;
     let _subscription = eventloop.subscribe( move |message: &ButtonRawEvent| {
         let mut update_display = false;
@@ -300,9 +299,8 @@ fn main() -> Result<()> {
         if update_display {
             let power_text = format!(
                 "Power: {}", if state { "On" } else { "Off"});
-            let adc_text = format!("Adc: {}", adc.read(0));
+            let adc_text = format!("Adc: {}", adc.read(0).unwrap());
             let voltage_text = format!("V: {}", vmap(adc_value, C1, C2));
-
             led_draw(&power_text, &adc_text, &voltage_text, &mut display.cropped(&Rectangle::new(top_left, size)))
                 .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
         }
