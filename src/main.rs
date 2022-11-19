@@ -108,6 +108,9 @@ pub enum ButtonRawEvent {
     Unknown = 1 << 31,
 }
 
+// System/Reference Voltage
+const V_IN:f32 = 3.3;
+
 fn init_esp() -> Result<EspBackgroundEventLoop, EspError> {
     esp_idf_sys::link_patches();
 
@@ -255,7 +258,8 @@ fn main() -> Result<()> {
         pins.gpio12, // clk
         pins.gpio11, // mosi
         pins.gpio13, // miso
-        pins.gpio15 // cs
+        pins.gpio15, // cs
+        V_IN,
     )?;
     //let mut thermistor = Thermistor::new(&powered_adc1_3)?;
     let _subscription = eventloop.subscribe( move |message: &ButtonRawEvent| {
@@ -283,11 +287,13 @@ fn main() -> Result<()> {
         // we are the upper part of the voltage divider
         let v_out = v_in - v_r1;
         let r_ntc = v_out * r1 / (v_in - v_out);
+        let adc_reading = adc.read(0).unwrap();
+        let v_r1 = biquad1.run(adc_reading.voltage);
 
         if update_display {
             let power_text = format!(
                 "Power: {}", if state { "On" } else { "Off"});
-            let adc_text = format!("ADC: {}", filtered_adc_value);
+            let adc_text = format!("ADC: {}", adc_reading.raw);
             let voltage_text = format!("V: {}", v_r1);
             let resistor_text = format!("R_ntc: {}", r_ntc);
             led_draw(&power_text, &adc_text, &voltage_text, &resistor_text, &mut display.cropped(&Rectangle::new(top_left, size)))
