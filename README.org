@@ -6,3 +6,9 @@
 #+begin_src bash
 cargo build --release --features ttgo --target xtensa-esp32s2-espidf
 #+end_src
+
+** Flashing
+
+#+begin_src bash
+cargo espflash --release --features ttgo --target xtensa-esp32s2-espidf --monitor --speed 460800
+#+end_src

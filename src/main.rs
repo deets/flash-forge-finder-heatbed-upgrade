@@ -181,19 +181,6 @@ use st7789::ST7789;
 
 type Display = ST7789<SPIInterfaceNoCS<esp_idf_hal::spi::Master<SPI2, Gpio36<esp_idf_hal::gpio::Unknown>, Gpio35<esp_idf_hal::gpio::Unknown>, Gpio21<esp_idf_hal::gpio::Unknown>, Gpio34<esp_idf_hal::gpio::Unknown>>, Gpio37<esp_idf_hal::gpio::Output>>, Gpio38<esp_idf_hal::gpio::Output>>;
 
-// 0.5V -> 473 read from ADC
-// 1.0V -> 969 read from ADC
-const C1:(f32, f32) = (0.5, 473.0);
-const C2:(f32, f32) = (1.0, 969.0);
-
-// pX: V, adc
-fn vmap(adc: f32, p0: (f32, f32), p1: (f32, f32)) -> f32 {
-    let a = (p1.0 - p0.0) / (p1.1 - p0.1);
-    let b = p0.0 - (a * p0.1);
-    a * adc + b
-}
-
-
 fn main() -> Result<()> {
     let mut eventloop = init_esp().expect("Error initializing ESP");
     // Bind the log crate to the ESP Logging facilities
@@ -254,12 +241,6 @@ fn main() -> Result<()> {
     })?;
     display_timer.every(Duration::from_secs(1))?;
 
-    let mut adc1_3 = pins.gpio4.into_analog_atten_11db()?;
-    let mut powered_adc1 = adc::PoweredAdc::new(
-        peripherals.adc1,
-        adc::config::Config::new().calibration(true),
-    )?;
-
     // Cutoff and sampling frequencies
     let f0 = 1.hz();
     let fs = 1.khz();
@@ -295,13 +276,21 @@ fn main() -> Result<()> {
             },
             _ => {}
         }
-        let adc_value = biquad1.run(powered_adc1.read(&mut adc1_3).unwrap() as f32);
+        let v_in = 3.3;
+        let r1 = 4720.0;
+        let filtered_adc_value = biquad1.run(adc.read(0).unwrap() as f32);
+        let v_r1 = filtered_adc_value / 1023.0 * v_in;
+        // we are the upper part of the voltage divider
+        let v_out = v_in - v_r1;
+        let r_ntc = v_out * r1 / (v_in - v_out);
+
         if update_display {
             let power_text = format!(
                 "Power: {}", if state { "On" } else { "Off"});
-            let adc_text = format!("Adc: {}", adc.read(0).unwrap());
-            let voltage_text = format!("V: {}", vmap(adc_value, C1, C2));
-            led_draw(&power_text, &adc_text, &voltage_text, &mut display.cropped(&Rectangle::new(top_left, size)))
+            let adc_text = format!("ADC: {}", filtered_adc_value);
+            let voltage_text = format!("V: {}", v_r1);
+            let resistor_text = format!("R_ntc: {}", r_ntc);
+            led_draw(&power_text, &adc_text, &voltage_text, &resistor_text, &mut display.cropped(&Rectangle::new(top_left, size)))
                 .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
         }
     })?;
@@ -365,7 +354,7 @@ fn ttgo_hello_world(
 }
 
 #[allow(dead_code)]
-fn led_draw<D>(power_text: &str, adc_text: &str, voltage_text: &str, display: &mut D) -> Result<(), D::Error>
+fn led_draw<D>(power_text: &str, adc_text: &str, voltage_text: &str, resistor_text: &str, display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget + Dimensions,
     D::Color: From<Rgb565>,
@@ -396,6 +385,11 @@ where
     Text::new(
         voltage_text,
         pos + offset * 2 ,
+        MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE.into()),
+    ).draw(display)?;
+    Text::new(
+        resistor_text,
+        pos + offset * 3 ,
         MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE.into()),
     ).draw(display)?;
 
