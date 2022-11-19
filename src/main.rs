@@ -256,7 +256,16 @@ fn main() -> Result<()> {
     // Create two different biquads
     let mut biquad1 = DirectForm1::<f32>::new(coeffs);
 
-    let thermistor = Thermistor::new(V_IN, 4720.0, DividerConfiguration::NtcTop);
+    // See https://github.com/Klipper3d/klipper/issues/1125 for my NTC
+    // value assumptionns
+    let thermistor = Thermistor::new(
+        V_IN,
+        4720.0,
+        DividerConfiguration::NtcTop,
+        3950.0, // beta
+        100_000.0, // R_o,
+        25.0, // T_o
+    );
 
     let mut adc = MCP3008::new(
         peripherals.spi3,
@@ -288,14 +297,14 @@ fn main() -> Result<()> {
         let r1 = 4720.0;
         let adc_reading = adc.read(0).unwrap();
         let v_r1 = biquad1.run(adc_reading.voltage);
-        let r_ntc = thermistor.resistance(v_r1);
+        let temp = thermistor.temperature(v_r1);
 
         if update_display {
             let power_text = format!(
                 "Power: {}", if state { "On" } else { "Off"});
             let adc_text = format!("ADC: {}", adc_reading.raw);
             let voltage_text = format!("V: {}", v_r1);
-            let resistor_text = format!("R_ntc: {}", r_ntc);
+            let resistor_text = format!("Temp: {}", temp);
             led_draw(&power_text, &adc_text, &voltage_text, &resistor_text, &mut display.cropped(&Rectangle::new(top_left, size)))
                 .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
         }
