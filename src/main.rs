@@ -4,6 +4,8 @@
 
 mod mcp3008;
 use mcp3008::MCP3008;
+mod thermistor;
+use thermistor::{Thermistor, DividerConfiguration};
 
 // mod thermistor
 // use thermistor::Thermistor;
@@ -253,6 +255,9 @@ fn main() -> Result<()> {
 
     // Create two different biquads
     let mut biquad1 = DirectForm1::<f32>::new(coeffs);
+
+    let thermistor = Thermistor::new(V_IN, 4720.0, DividerConfiguration::NtcTop);
+
     let mut adc = MCP3008::new(
         peripherals.spi3,
         pins.gpio12, // clk
@@ -280,15 +285,10 @@ fn main() -> Result<()> {
             },
             _ => {}
         }
-        let v_in = 3.3;
         let r1 = 4720.0;
-        let filtered_adc_value = biquad1.run(adc.read(0).unwrap() as f32);
-        let v_r1 = filtered_adc_value / 1023.0 * v_in;
-        // we are the upper part of the voltage divider
-        let v_out = v_in - v_r1;
-        let r_ntc = v_out * r1 / (v_in - v_out);
         let adc_reading = adc.read(0).unwrap();
         let v_r1 = biquad1.run(adc_reading.voltage);
+        let r_ntc = thermistor.resistance(v_r1);
 
         if update_display {
             let power_text = format!(
