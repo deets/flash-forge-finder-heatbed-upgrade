@@ -1,7 +1,9 @@
 use esp_idf_hal::spi;
 use esp_idf_hal::gpio;
 use esp_idf_hal::prelude::*;
+use esp_idf_hal::spi::{Master, Spi, SPI3};
 use esp_idf_sys::EspError;
+use esp_idf_hal::gpio::{OutputPin, InputPin};
 use esp_idf_hal::spi::SpiError;
 use embedded_hal::prelude::_embedded_hal_blocking_spi_Transfer;
 use byteorder::{ByteOrder, BigEndian};
@@ -12,26 +14,25 @@ pub struct Reading
     pub voltage: f32,
 }
 
-pub struct MCP3008
+pub struct MCP3008<
+    SCLK:OutputPin,
+    SDO:OutputPin,
+    SDI:InputPin + OutputPin,
+    CS:OutputPin>
 {
-    spi: spi::Master<
-            spi::SPI3,
-        gpio::Gpio12<gpio::Unknown>,
-        gpio::Gpio11<gpio::Unknown>,
-        gpio::Gpio13<gpio::Unknown>,
-        gpio::Gpio15<gpio::Unknown>>,
+    spi: Master<SPI3, SCLK, SDO, SDI, CS>,
     v_ref: f32,
 }
 
 
-impl MCP3008 {
+impl<SCLK:OutputPin, SDO:OutputPin, SDI:InputPin + OutputPin, CS:OutputPin> MCP3008<SCLK, SDO, SDI, CS> {
     pub fn new(spi: spi::SPI3,
-               clk: gpio::Gpio12<gpio::Unknown>,
-               si: gpio::Gpio11<gpio::Unknown>,
-               so: gpio::Gpio13<gpio::Unknown>,
-               cs: gpio::Gpio15<gpio::Unknown>,
+               clk: SCLK,
+               si: SDO,
+               so: SDI,
+               cs: CS,
                v_ref: f32
-    ) -> Result<MCP3008, EspError>
+    ) -> Result<Self, EspError>
     {
         let config = <spi::config::Config as Default>::default().baudrate(5.MHz().into());
         let pins = spi::Pins {
