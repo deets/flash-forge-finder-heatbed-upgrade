@@ -3,9 +3,15 @@
 //#![feature(backtrace)]
 
 mod mcp3008;
-use mcp3008::MCP3008;
 mod thermistor;
+mod pid;
+mod events;
+mod consts;
+
+use mcp3008::MCP3008;
 use thermistor::{Thermistor, DividerConfiguration};
+use pid::PIDController;
+use events::HeatbedControllerEvent;
 
 // mod thermistor
 // use thermistor::Thermistor;
@@ -68,8 +74,6 @@ use esp_idf_hal::i2c;
 use esp_idf_hal::prelude::*;
 use esp_idf_hal::spi;
 
-use esp_idf_sys::{self, c_types};
-
 use display_interface_spi::SPIInterfaceNoCS;
 
 use embedded_graphics::mono_font::{ascii::FONT_10X20, MonoTextStyle};
@@ -77,7 +81,6 @@ use embedded_graphics::pixelcolor::*;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::*;
 use embedded_graphics::text::*;
-use num_enum::{FromPrimitive, IntoPrimitive};
 
 use st7789;
 
@@ -100,19 +103,6 @@ thread_local! {
     static TLS: RefCell<u32> = RefCell::new(13);
 }
 
-#[repr(i32)]
-#[derive(Copy, Clone, Debug, FromPrimitive, IntoPrimitive)]
-pub enum ButtonRawEvent {
-    IO0 = 1 << 0,
-    SampleTimer = 1 << 1,
-    DisplayTimer = 1 << 2,
-    #[default]
-    Unknown = 1 << 31,
-}
-
-// System/Reference Voltage
-const V_IN:f32 = 3.3;
-
 fn init_esp() -> Result<EspBackgroundEventLoop, EspError> {
     esp_idf_sys::link_patches();
 
@@ -133,47 +123,6 @@ fn init_esp() -> Result<EspBackgroundEventLoop, EspError> {
     Ok(EspBackgroundEventLoop::new(&config)?)
 }
 
-impl EspTypedEventSerializer<ButtonRawEvent> for ButtonRawEvent {
-    fn serialize<R>(
-        event: &ButtonRawEvent,
-        f: impl for<'a> FnOnce(&'a EspEventPostData) -> R,
-    ) -> R {
-        let v = match event {
-            ButtonRawEvent::IO0 => 1 << 0,
-            ButtonRawEvent::SampleTimer => 1 << 1,
-            ButtonRawEvent::DisplayTimer => 1 << 2,
-            ButtonRawEvent::Unknown => 1 << 31,
-        };
-        f(&unsafe { EspEventPostData::new(Self::source(), Some(v), event) })
-    }
-}
-
-impl EspTypedEventSource for ButtonRawEvent {
-    fn source() -> *const c_types::c_char {
-        b"DEMO-SERVICE\0".as_ptr() as *const _
-    }
-}
-
-impl EspTypedEventDeserializer<ButtonRawEvent> for ButtonRawEvent {
-    #[allow(non_upper_case_globals, non_snake_case)]
-    fn deserialize<R>(
-        data: &esp_idf_svc::eventloop::EspEventFetchData,
-        f: &mut impl for<'a> FnMut(&'a ButtonRawEvent) -> R,
-    ) -> R {
-        let event_id = data.event_id as u32;
-
-        let event = if event_id == (1 << 0) {
-            ButtonRawEvent::IO0
-        } else if event_id == (1 << 1) {
-            ButtonRawEvent::SampleTimer
-        } else if event_id == (1 << 2) {
-            ButtonRawEvent::DisplayTimer
-        } else {
-            panic!("Unknown event ID: {}", event_id);
-        };
-        f(&event)
-    }
-}
 
 use esp_idf_hal::gpio::Gpio21;
 use esp_idf_hal::gpio::Gpio34;
@@ -205,6 +154,15 @@ fn main() -> Result<()> {
         pins.gpio35,
         pins.gpio34,
     )?;
+    let adc = MCP3008::new(
+        peripherals.spi3,
+        pins.gpio12, // clk
+        pins.gpio11, // mosi
+        pins.gpio13, // miso
+        pins.gpio15, // cs
+        consts::V_IN,
+        )?;
+    PIDController::start(adc)?;
 
     // #[allow(clippy::redundant_clone)]
     // #[cfg(not(feature = "qemu"))]
@@ -222,7 +180,7 @@ fn main() -> Result<()> {
     let _io0_irq = unsafe {
         io0_irq.into_subscribed(
             move || {
-                io0_eventloop.post(&ButtonRawEvent::IO0, Some(Duration::from_millis(0))).unwrap();
+                io0_eventloop.post(&HeatbedControllerEvent::IO0, Some(Duration::from_millis(0))).unwrap();
                 },
             InterruptType::NegEdge,
         )
@@ -236,13 +194,13 @@ fn main() -> Result<()> {
 
     let mut sample_eventloop = eventloop.clone();
     let mut sample_timer = EspTimerService::new()?.timer(move || {
-        sample_eventloop.post(&ButtonRawEvent::SampleTimer, Some(Duration::from_millis(0))).unwrap();
+        sample_eventloop.post(&HeatbedControllerEvent::SampleTimer, Some(Duration::from_millis(0))).unwrap();
     })?;
     sample_timer.every(Duration::from_millis(1))?;
 
     let mut display_eventloop = eventloop.clone();
     let mut display_timer = EspTimerService::new()?.timer(move || {
-        display_eventloop.post(&ButtonRawEvent::DisplayTimer, Some(Duration::from_millis(0))).unwrap();
+        display_eventloop.post(&HeatbedControllerEvent::DisplayTimer, Some(Duration::from_millis(0))).unwrap();
     })?;
     display_timer.every(Duration::from_secs(1))?;
 
@@ -256,30 +214,10 @@ fn main() -> Result<()> {
     // Create two different biquads
     let mut biquad1 = DirectForm1::<f32>::new(coeffs);
 
-    // See https://github.com/Klipper3d/klipper/issues/1125 for my NTC
-    // value assumptionns
-    let thermistor = Thermistor::new(
-        V_IN,
-        4720.0,
-        DividerConfiguration::NtcTop,
-        3950.0, // beta
-        100_000.0, // R_o,
-        25.0, // T_o
-    );
-
-    let mut adc = MCP3008::new(
-        peripherals.spi3,
-        pins.gpio12, // clk
-        pins.gpio11, // mosi
-        pins.gpio13, // miso
-        pins.gpio15, // cs
-        V_IN,
-    )?;
-    //let mut thermistor = Thermistor::new(&powered_adc1_3)?;
-    let _subscription = eventloop.subscribe( move |message: &ButtonRawEvent| {
+    let _subscription = eventloop.subscribe( move |message: &HeatbedControllerEvent| {
         let mut update_display = false;
         match message {
-            ButtonRawEvent::IO0 => {
+            HeatbedControllerEvent::IO0 => {
                 info!("Got message from the event loop");//: {:?}", message.0);
                 state = !state;
                 if state {
@@ -289,22 +227,22 @@ fn main() -> Result<()> {
                 }
                 update_display = true;
             },
-            ButtonRawEvent::DisplayTimer => {
+            HeatbedControllerEvent::DisplayTimer => {
                 update_display = true;
             },
             _ => {}
         }
-        let r1 = 4720.0;
-        let adc_reading = adc.read(0).unwrap();
-        let v_r1 = biquad1.run(adc_reading.voltage);
-        let temp = thermistor.temperature(v_r1);
+
+        // let adc_reading = adc.read(0).unwrap();
+        // let v_r1 = biquad1.run(adc_reading.voltage);
+        // let temp = thermistor.temperature(v_r1);
 
         if update_display {
             let power_text = format!(
                 "Power: {}", if state { "On" } else { "Off"});
-            let adc_text = format!("ADC: {}", adc_reading.raw);
-            let voltage_text = format!("V: {}", v_r1);
-            let resistor_text = format!("Temp: {}", temp);
+            let adc_text = format!("ADC: {}", 44);
+            let voltage_text = format!("V: {}", 2.0);
+            let resistor_text = format!("Temp: {}", 3.0);
             led_draw(&power_text, &adc_text, &voltage_text, &resistor_text, &mut display.cropped(&Rectangle::new(top_left, size)))
                 .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
         }

@@ -13,6 +13,9 @@ pub struct Reading
     pub raw: u32,
     pub voltage: f32,
 }
+pub trait SingleChannelRead {
+    fn read(&mut self, channel: u8) -> Result<Reading, SpiError>;
+}
 
 pub struct MCP3008<
     SCLK:OutputPin,
@@ -50,7 +53,10 @@ impl<SCLK:OutputPin, SDO:OutputPin, SDI:InputPin + OutputPin, CS:OutputPin> MCP3
         Ok(MCP3008{spi: di, v_ref: v_ref})
     }
 
-    pub fn read(&mut self, channel: u8) -> Result<Reading, SpiError> {
+}
+
+impl<SCLK:OutputPin, SDO:OutputPin, SDI:InputPin + OutputPin, CS:OutputPin> SingleChannelRead for MCP3008<SCLK, SDO, SDI, CS> {
+    fn read(&mut self, channel: u8) -> Result<Reading, SpiError> {
         // Start bit, Single ended, channel number
         let command = ((0b11000 | channel) as u16) << 11;
         // We need 17 bits in one transfer
