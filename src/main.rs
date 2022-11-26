@@ -231,11 +231,12 @@ fn main() -> Result<()> {
         }
 
         if update_display {
+            let pid_data = pidcontroller.data();
             let power_text = format!(
                 "Power: {}", if state { "On" } else { "Off"});
-            let adc_text = format!("ADC: {}", 44);
-            let voltage_text = "0.0";
-            let resistor_text = format!("Temp: {}", pidcontroller.temperature());
+            let adc_text = format!("ADC: {}", pid_data.adc_value);
+            let voltage_text = format!("V: {}", pid_data.voltage);
+            let resistor_text = format!("Temp: {}", pid_data.temperature);
             led_draw(&power_text, &adc_text, &voltage_text, &resistor_text, &mut display.cropped(&Rectangle::new(top_left, size)))
                 .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
         }

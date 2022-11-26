@@ -15,9 +15,17 @@ use crate::consts::V_IN;
 use crate::mcp3008::SingleChannelRead;
 use crate::thermistor::{Thermistor, DividerConfiguration};
 
+#[derive(Copy, Clone)]
+pub struct PIDData
+{
+    pub temperature: f32,
+    pub voltage: f32,
+    pub adc_value: u32
+}
+
 pub struct PIDController
 {
-    temperature: Arc<Mutex<f32>>
+    temperature: Arc<Mutex<PIDData>>
 }
 
 fn create_adc_filter() -> DirectForm1<f32>
@@ -33,7 +41,9 @@ impl PIDController {
     pub fn start<ADC:SingleChannelRead + Send + 'static>(mut adc: ADC, thermistor: Thermistor)
                                                          -> Result<(PIDController, JoinHandle<()>)>
     {
-        let temperature = Arc::new(Mutex::new(0.0f32));
+        let temperature = Arc::new(Mutex::new(
+            PIDData{ temperature: 0.0, voltage: 0.0, adc_value: 0}
+        ));
         let pid_temperature = Arc::clone(&temperature);
 
         let r = thread::Builder::new().stack_size(4096).spawn(move || {
@@ -45,7 +55,9 @@ impl PIDController {
                 let temp = thermistor.temperature(v_r1);
                 {
                     let mut t = pid_temperature.lock().unwrap();
-                    *t = temp;
+                    t.temperature = temp;
+                    t.adc_value = adc_reading.raw;
+                    t.voltage = v_r1;
                 }
                 thread::sleep(Duration::from_millis(10));
             }
@@ -53,7 +65,7 @@ impl PIDController {
         Ok((PIDController{ temperature }, r))
     }
 
-    pub fn temperature(&mut self) -> f32
+    pub fn data(&mut self) -> PIDData
     {
         *self.temperature.lock().unwrap()
     }
