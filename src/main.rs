@@ -13,9 +13,6 @@ use thermistor::{Thermistor, DividerConfiguration};
 use pid::PIDController;
 use events::HeatbedControllerEvent;
 
-// mod thermistor
-// use thermistor::Thermistor;
-
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -27,8 +24,6 @@ use anyhow::bail;
 
 use embedded_svc::mqtt::client::utils::ConnState;
 use log::*;
-
-use biquad::*;
 
 use embedded_hal::adc::OneShot;
 use embedded_hal::blocking::delay::DelayMs;
@@ -154,6 +149,7 @@ fn main() -> Result<()> {
         pins.gpio35,
         pins.gpio34,
     )?;
+
     let adc = MCP3008::new(
         peripherals.spi3,
         pins.gpio12, // clk
@@ -161,8 +157,19 @@ fn main() -> Result<()> {
         pins.gpio13, // miso
         pins.gpio15, // cs
         consts::V_IN,
-        )?;
-    PIDController::start(adc)?;
+    )?;
+    // See https://github.com/Klipper3d/klipper/issues/1125 for my NTC
+    // value assumptionns
+    let thermistor = Thermistor::new(
+        consts::V_IN,
+        4720.0,
+        DividerConfiguration::NtcTop,
+        3950.0, // beta
+        100_000.0, // R_o,
+        25.0, // T_o
+    );
+
+    let (mut pidcontroller, _) = PIDController::start(adc, thermistor)?;
 
     // #[allow(clippy::redundant_clone)]
     // #[cfg(not(feature = "qemu"))]
@@ -204,16 +211,6 @@ fn main() -> Result<()> {
     })?;
     display_timer.every(Duration::from_secs(1))?;
 
-    // Cutoff and sampling frequencies
-    let f0 = 1.hz();
-    let fs = 1.khz();
-
-    // Create coefficients for the biquads
-    let coeffs = Coefficients::<f32>::from_params(Type::LowPass, fs, f0, Q_BUTTERWORTH_F32).unwrap();
-
-    // Create two different biquads
-    let mut biquad1 = DirectForm1::<f32>::new(coeffs);
-
     let _subscription = eventloop.subscribe( move |message: &HeatbedControllerEvent| {
         let mut update_display = false;
         match message {
@@ -233,16 +230,12 @@ fn main() -> Result<()> {
             _ => {}
         }
 
-        // let adc_reading = adc.read(0).unwrap();
-        // let v_r1 = biquad1.run(adc_reading.voltage);
-        // let temp = thermistor.temperature(v_r1);
-
         if update_display {
             let power_text = format!(
                 "Power: {}", if state { "On" } else { "Off"});
             let adc_text = format!("ADC: {}", 44);
-            let voltage_text = format!("V: {}", 2.0);
-            let resistor_text = format!("Temp: {}", 3.0);
+            let voltage_text = "0.0";
+            let resistor_text = format!("Temp: {}", pidcontroller.temperature());
             led_draw(&power_text, &adc_text, &voltage_text, &resistor_text, &mut display.cropped(&Rectangle::new(top_left, size)))
                 .map_err(|e| anyhow::anyhow!("Display error: {:?}", e)).unwrap();
         }
