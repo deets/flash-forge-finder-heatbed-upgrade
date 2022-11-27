@@ -6,9 +6,11 @@ use embedded_svc::event_bus::EventBus;
 use embedded_svc::event_bus::Postbox;
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::gpio::Pins;
+use esp_idf_hal::gpio::OutputPin;
 use anyhow::Result;
 use biquad::*;
-
+use esp_idf_hal::rmt::config::{Loop, TransmitConfig};
+use esp_idf_hal::rmt::*;
 
 use crate::events::HeatbedControllerEvent;
 use crate::consts::V_IN;
@@ -37,9 +39,19 @@ fn create_adc_filter() -> DirectForm1<f32>
     DirectForm1::<f32>::new(coeffs)
 }
 
+fn create_pwm<PwmPin: OutputPin, RmtChannel: HwChannel>(pwm_pin: PwmPin, rmt_channel: RmtChannel) -> Result<Transmit<PwmPin, RmtChannel>>
+{
+    let config = TransmitConfig::new().looping(Loop::Endless);
+    Ok(Transmit::new(pwm_pin, rmt_channel, &config)?)
+}
+
 impl PIDController {
-    pub fn start<ADC:SingleChannelRead + Send + 'static>(mut adc: ADC, thermistor: Thermistor)
-                                                         -> Result<(PIDController, JoinHandle<()>)>
+    pub fn start<ADC:SingleChannelRead + Send + 'static, PwmPin: OutputPin + 'static, RmtChannel: HwChannel + Send + 'static>(
+        mut adc: ADC,
+        thermistor: Thermistor,
+        pwm_pin: PwmPin,
+        rmt_channel: RmtChannel
+    ) -> Result<(PIDController, JoinHandle<()>)>
     {
         let temperature = Arc::new(Mutex::new(
             PIDData{ temperature: 0.0, voltage: 0.0, adc_value: 0}
@@ -48,6 +60,15 @@ impl PIDController {
 
         let r = thread::Builder::new().stack_size(4096).spawn(move || {
             let mut adc_filter = create_adc_filter();
+            let mut pwm = create_pwm(pwm_pin, rmt_channel).unwrap();
+            println!("pwm counter_clock: {}", pwm.counter_clock().unwrap());
+
+            let low = Pulse::new(PinState::Low, PulseTicks::new(10).unwrap());
+            let high = Pulse::new(PinState::High, PulseTicks::new(10).unwrap());
+            let mut signal = FixedLengthSignal::<2>::new();
+            signal.set(0, &(low, high)).unwrap();
+            signal.set(1, &(high, low)).unwrap();
+            pwm.start(signal).unwrap();
 
             loop {
                 let adc_reading = adc.read(0).expect("SPI broke");

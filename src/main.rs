@@ -169,7 +169,7 @@ fn main() -> Result<()> {
         25.0, // T_o
     );
 
-    let (mut pidcontroller, _) = PIDController::start(adc, thermistor)?;
+    let (mut pidcontroller, _) = PIDController::start(adc, thermistor, pins.gpio4, peripherals.rmt.channel0)?;
 
     // #[allow(clippy::redundant_clone)]
     // #[cfg(not(feature = "qemu"))]
