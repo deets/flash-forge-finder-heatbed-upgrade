@@ -11,9 +11,11 @@ use anyhow::Result;
 use biquad::*;
 use esp_idf_hal::rmt::config::{Loop, TransmitConfig};
 use esp_idf_hal::rmt::*;
+use embedded_hal::PwmPin;
+use num::clamp;
 
 use crate::events::HeatbedControllerEvent;
-use crate::consts::V_IN;
+use crate::consts::{V_IN, RMT_CLOCK_DIVIDER, RMT_DUTY_CYCLE};
 use crate::mcp3008::SingleChannelRead;
 use crate::thermistor::{Thermistor, DividerConfiguration};
 
@@ -41,8 +43,30 @@ fn create_adc_filter() -> DirectForm1<f32>
 
 fn create_pwm<PwmPin: OutputPin, RmtChannel: HwChannel>(pwm_pin: PwmPin, rmt_channel: RmtChannel) -> Result<Transmit<PwmPin, RmtChannel>>
 {
-    let config = TransmitConfig::new().looping(Loop::Endless);
+    let config = TransmitConfig::new().clock_divider(RMT_CLOCK_DIVIDER).looping(Loop::Endless);
     Ok(Transmit::new(pwm_pin, rmt_channel, &config)?)
+}
+
+fn set_duty_cycle<PwmPin: OutputPin, RmtChannel: HwChannel>(pwm: &mut Transmit<PwmPin, RmtChannel>, duty_cycle: f32)
+{
+    let duty_cycle = clamp(duty_cycle, 0.0, 1.0);
+    let ticks_hz = pwm.counter_clock().unwrap();
+    let period = u32::from(ticks_hz / 1000); // These many ticks for one period
+    let duty_cycle = period * (duty_cycle * 1000.0) as u32 / 1000;
+    let rest_cycle = period - duty_cycle;
+    let mut high = Pulse::new(PinState::High, PulseTicks::max());
+    let mut low = Pulse::new(PinState::Low, PulseTicks::max());
+    if duty_cycle == 0 {
+        high = low;
+    } else if rest_cycle == 0 {
+        low = high;
+    } else {
+        high = Pulse::new(PinState::High, PulseTicks::new(duty_cycle as u16).unwrap());
+        low = Pulse::new(PinState::Low, PulseTicks::new(rest_cycle as u16).unwrap());
+    }
+    let mut signal = FixedLengthSignal::<1>::new();
+    signal.set(0, &(low, high)).unwrap();
+    pwm.start(signal).unwrap();
 }
 
 impl PIDController {
@@ -61,19 +85,15 @@ impl PIDController {
         let r = thread::Builder::new().stack_size(4096).spawn(move || {
             let mut adc_filter = create_adc_filter();
             let mut pwm = create_pwm(pwm_pin, rmt_channel).unwrap();
-            println!("pwm counter_clock: {}", pwm.counter_clock().unwrap());
-
-            let low = Pulse::new(PinState::Low, PulseTicks::new(10).unwrap());
-            let high = Pulse::new(PinState::High, PulseTicks::new(10).unwrap());
-            let mut signal = FixedLengthSignal::<2>::new();
-            signal.set(0, &(low, high)).unwrap();
-            signal.set(1, &(high, low)).unwrap();
-            pwm.start(signal).unwrap();
+            let mut duty_cycle = 0.0;
 
             loop {
                 let adc_reading = adc.read(0).expect("SPI broke");
                 let v_r1 = adc_filter.run(adc_reading.voltage);
                 let temp = thermistor.temperature(v_r1);
+                duty_cycle += 0.01;
+                set_duty_cycle(&mut pwm, duty_cycle);
+
                 {
                     let mut t = pid_temperature.lock().unwrap();
                     t.temperature = temp;
